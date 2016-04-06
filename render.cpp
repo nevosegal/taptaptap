@@ -3,11 +3,16 @@
 #include <rtdk.h>
 #include <math.h>
 #include <NE10.h>
+#include <WriteFile.h>
+#include "drums.h"
 
  
 ne10_fft_cpx_float32_t* timeDomainIn;
 ne10_fft_cpx_float32_t* frequencyDomain;
 ne10_fft_cfg_float32_t cfg;
+
+extern float *gDrumSampleBuffers[NUMBER_OF_DRUMS];
+extern int gDrumSampleBufferLengths[NUMBER_OF_DRUMS];
 
 
 const int gFFTSize = 64;
@@ -43,12 +48,12 @@ float rms(float* samples, int numSamples){
 	return rms;
 }
 
-float centroid(float* samples, int numSamples) {
+float centroid(float* ampSpectrum) {
 	float numerator = 0;
 	float denominator = 0;
-	for (unsigned int k = 0; k < numSamples; k++) {
-		numerator += k * abs(samples[k]);
-		denominator += samples[k];
+	for (unsigned int k = 0; k < gFFTSize; k++) {
+		numerator += k * abs(ampSpectrum[k]);
+		denominator += ampSpectrum[k];
 	}
 
 	return numerator / denominator;

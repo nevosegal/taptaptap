@@ -4,8 +4,14 @@
 #include <signal.h>
 #include <getopt.h>
 #include <BeagleRT.h>
+#include <sndfile.h>
+#include "drums.h"
+
 
 using namespace std;
+
+float *gDrumSampleBuffers[NUMBER_OF_DRUMS];
+int gDrumSampleBufferLengths[NUMBER_OF_DRUMS];
 
 // Handle Ctrl-C by requesting that the audio rendering stop
 void interrupt_handler(int var)
@@ -21,6 +27,72 @@ void usage(const char * processName)
 	BeagleRT_usage();
 
 	cerr << "   --help [-h]:             Print this menu\n";
+}
+
+int initDrums() {
+	/* Load drums from WAV files */
+	SNDFILE *sndfile ;
+	SF_INFO sfinfo ;
+	char filename[64];
+
+	for(int i = 0; i < NUMBER_OF_DRUMS; i++) {
+		snprintf(filename, 64, "audio/drum%d.wav", i);
+
+		if (!(sndfile = sf_open (filename, SFM_READ, &sfinfo))) {
+			printf("Couldn't open file %s\n", filename);
+
+			/* Free already loaded sounds */
+			for(int j = 0; j < i; j++)
+				free(gDrumSampleBuffers[j]);
+			return 1;
+		}
+
+		if (sfinfo.channels != 1) {
+			printf("Error: %s is not a mono file\n", filename);
+
+			/* Free already loaded sounds */
+			for(int j = 0; j < i; j++)
+				free(gDrumSampleBuffers[j]);
+			return 1;
+		}
+
+		gDrumSampleBufferLengths[i] = sfinfo.frames;
+		gDrumSampleBuffers[i] = (float *)malloc(gDrumSampleBufferLengths[i] * sizeof(float));
+		if(gDrumSampleBuffers[i] == NULL) {
+			printf("Error: couldn't allocate buffer for %s\n", filename);
+
+			/* Free already loaded sounds */
+			for(int j = 0; j < i; j++)
+				free(gDrumSampleBuffers[j]);
+			return 1;
+		}
+
+		int subformat = sfinfo.format & SF_FORMAT_SUBMASK;
+		int readcount = sf_read_float(sndfile, gDrumSampleBuffers[i], gDrumSampleBufferLengths[i]);
+
+		/* Pad with zeros in case we couldn't read whole file */
+		for(int k = readcount; k < gDrumSampleBufferLengths[i]; k++)
+			gDrumSampleBuffers[i][k] = 0;
+
+		if (subformat == SF_FORMAT_FLOAT || subformat == SF_FORMAT_DOUBLE) {
+			double	scale ;
+			int 	m ;
+
+			sf_command (sndfile, SFC_CALC_SIGNAL_MAX, &scale, sizeof (scale)) ;
+			if (scale < 1e-10)
+				scale = 1.0 ;
+			else
+				scale = 32700.0 / scale ;
+			printf("Scale = %f\n", scale);
+
+			for (m = 0; m < gDrumSampleBufferLengths[i]; m++)
+				gDrumSampleBuffers[i][m] *= scale;
+		}
+
+		sf_close(sndfile);
+	}
+
+	return 0;
 }
 
 int main(int argc, char *argv[])
