@@ -37,6 +37,7 @@ int initDrums() {
 
 	for(int i = 0; i < NUMBER_OF_DRUMS; i++) {
 		snprintf(filename, 64, "audio/drum%d.wav", i);
+		rt_printf("file: %s\n", filename);
 
 		if (!(sndfile = sf_open (filename, SFM_READ, &sfinfo))) {
 			printf("Couldn't open file %s\n", filename);
@@ -123,6 +124,11 @@ int main(int argc, char *argv[])
 				exit(1);
 		}
 	}
+
+	if(initDrums()) {
+    	printf("Unable to load drum sounds. Check that you have all the WAV files!\n");
+    	return -1;
+    }
 
 	// Initialise the PRU audio device
 	if(BeagleRT_initAudio(&settings, 0) != 0) {

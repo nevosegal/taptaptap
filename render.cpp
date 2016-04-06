@@ -16,7 +16,10 @@ extern int gDrumSampleBufferLengths[NUMBER_OF_DRUMS];
 
 
 const int gFFTSize = 64;
-int gReadPointer;
+int gInputWritePointer;
+int gOutputReadPointer;
+
+bool gPlayDrum;
 
 float weights[gFFTSize];
 float totEnergy;
@@ -27,8 +30,10 @@ bool setup(BeagleRTContext *context, void *userData)
 	frequencyDomain = (ne10_fft_cpx_float32_t*) NE10_MALLOC (gFFTSize * sizeof (ne10_fft_cpx_float32_t));
 	cfg = ne10_fft_alloc_c2c_float32 (gFFTSize);
 
-	gReadPointer = 0;
+	gInputWritePointer = 0;
+	gOutputReadPointer = -1;
 	totEnergy = 0;
+	gPlayDrum = false;
 
 	for(unsigned int i=0; i<gFFTSize; i++){
 		weights[i] = pow(i,2);
@@ -62,12 +67,13 @@ float centroid(float* ampSpectrum) {
 
 void render(BeagleRTContext *context, void *userData)
 {
+	float out = 0;
 	for(unsigned int n = 0; n < context->audioFrames; n++) {
 
-		timeDomainIn[gReadPointer].r = (ne10_float32_t)(context->audioIn[n*context->audioChannels]);
-		timeDomainIn[gReadPointer].i = 0;
+		timeDomainIn[gInputWritePointer].r = (ne10_float32_t)(context->audioIn[n*context->audioChannels]);
+		timeDomainIn[gInputWritePointer].i = 0;
 
-		if(++gReadPointer >= gFFTSize){
+		if(++gInputWritePointer >= gFFTSize){
 			ne10_fft_c2c_1d_float32_neon(frequencyDomain, timeDomainIn, cfg->twiddles, cfg->factors, gFFTSize, 0);
 			for(unsigned int bin=0; bin<gFFTSize; bin++){
 				float mag = pow(frequencyDomain[bin].r,2)*pow(frequencyDomain[bin].i,2);
@@ -76,13 +82,25 @@ void render(BeagleRTContext *context, void *userData)
 
 			totEnergy /= (float)gFFTSize;
 
-			if(totEnergy > 5.0)
-				rt_printf("%f\n", totEnergy);
+			if(totEnergy > 5.0){
+				gPlayDrum = true;
+			}
 
-			gReadPointer = 0;
+			gInputWritePointer = 0;
 		}
-		// for(unsigned int ch=0; ch<context->audioChannels; ch++)
-		// 	context->audioOut[n*context->audioChannels+ch] = context->audioIn[n*context->audioChannels+ch];
+
+		if(gPlayDrum){
+			gOutputReadPointer++;
+			out = gDrumSampleBuffers[0][gOutputReadPointer];
+		}
+
+		if(gOutputReadPointer >= gDrumSampleBufferLengths[0]){
+			gPlayDrum = false;
+			gOutputReadPointer = -1;
+		}
+
+		for(unsigned int ch=0; ch<context->audioChannels; ch++)
+			context->audioOut[n*context->audioChannels+ch] = out;
 
 	}
 }
