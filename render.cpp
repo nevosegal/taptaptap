@@ -3,6 +3,7 @@
 #include <rtdk.h>
 #include <math.h>
 #include <NE10.h>
+#include <stdio.h>
 #include <WriteFile.h>
 #include "drums.h"
 
@@ -18,14 +19,14 @@ extern int gDrumSampleBufferLengths[NUMBER_OF_DRUMS];
 const int gFFTSize = 64;
 int gInputWritePointer;
 int gOutputReadPointer;
-
+float* gMagSpectrum;
 bool gPlayDrum;
+float gHanning[gFFTSize];
 
-float weights[gFFTSize];
+float weights[gFFTSize/2];
 float totEnergy;
 
-bool setup(BeagleRTContext *context, void *userData)
-{
+bool setup(BeagleRTContext *context, void *userData){
 	timeDomainIn = (ne10_fft_cpx_float32_t*) NE10_MALLOC (gFFTSize * sizeof (ne10_fft_cpx_float32_t));
 	frequencyDomain = (ne10_fft_cpx_float32_t*) NE10_MALLOC (gFFTSize * sizeof (ne10_fft_cpx_float32_t));
 	cfg = ne10_fft_alloc_c2c_float32 (gFFTSize);
@@ -35,10 +36,15 @@ bool setup(BeagleRTContext *context, void *userData)
 	totEnergy = 0;
 	gPlayDrum = false;
 
-	for(unsigned int i=0; i<gFFTSize; i++){
+	for(unsigned int i=0; i<gFFTSize/2; i++){
 		weights[i] = pow(i,2);
 	}
 
+	for (unsigned int i = 0; i < gFFTSize; i++){
+		gHanning[i] = 0.5 - 0.5 * cos(2 * M_PI * i / (gFFTSize - 1));	
+	}
+
+	gMagSpectrum = new float[gFFTSize/2];
 	return true;
 }
 
@@ -56,17 +62,16 @@ float rms(float* samples, int numSamples){
 float centroid(float* ampSpectrum) {
 	float numerator = 0;
 	float denominator = 0;
-	for (unsigned int k = 0; k < gFFTSize; k++) {
+	for (unsigned int k = 0; k < gFFTSize/2; k++) {
 		numerator += k * abs(ampSpectrum[k]);
 		denominator += ampSpectrum[k];
 	}
-
 	return numerator / denominator;
 }
 
 
-void render(BeagleRTContext *context, void *userData)
-{
+void render(BeagleRTContext *context, void *userData){
+
 	float out = 0;
 	for(unsigned int n = 0; n < context->audioFrames; n++) {
 
@@ -74,15 +79,23 @@ void render(BeagleRTContext *context, void *userData)
 		timeDomainIn[gInputWritePointer].i = 0;
 
 		if(++gInputWritePointer >= gFFTSize){
+			for(unsigned int i=0; i< gFFTSize; i++){
+				timeDomainIn[i].r *= gHanning[i];
+			}
 			ne10_fft_c2c_1d_float32_neon(frequencyDomain, timeDomainIn, cfg->twiddles, cfg->factors, gFFTSize, 0);
-			for(unsigned int bin=0; bin<gFFTSize; bin++){
+			for(unsigned int bin=1; bin<gFFTSize/2; bin++){
 				float mag = pow(frequencyDomain[bin].r,2)*pow(frequencyDomain[bin].i,2);
+				gMagSpectrum[bin] = mag;
 				totEnergy += weights[bin]*mag;
 			}
 
-			totEnergy /= (float)gFFTSize;
+			// for(unsigned int bin=0; bin<gFFTSize; bin++){
+			// 	printf("bin %d: %f\n", bin, frequencyDomain[bin].r);
+			// }
+			totEnergy /= (float)(gFFTSize/2);
 
-			if(totEnergy > 5.0){
+			if(totEnergy > 2.0){
+				// printf("%f\n", centroid(gMagSpectrum));
 				gPlayDrum = true;
 			}
 
