@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <WriteFile.h>
 #include "drums.h"
+#include <limits>
 
  
 ne10_fft_cpx_float32_t* timeDomainIn;
@@ -98,6 +99,43 @@ float flatness(float* ampSpectrum){
 	return exp(numerator / (gFFTSize/2))*(gFFTSize/2) / denominator;
 }
 
+float findMin(float* minVals){
+	float min = std::numeric_limits<float>::infinity();
+	
+	for(unsigned int i=0; i<3; i++){
+		if(minVals[i] < min){
+			min = minVals[i];
+		}
+	}
+	
+	return min;
+}
+
+
+float dtw(std::vector<float> v1, std::vector<float> v2){
+	float cost = 0;
+	std::vector<float> temp(v2.size()+1, 0.0);
+	std::vector< std::vector<float> > dtw(v1.size()+1, temp);
+	
+	dtw.at(0).at(0) = 0.0;
+	for(unsigned int i=0; i<v1.size(); i++){
+		dtw.at(i).at(0) = std::numeric_limits<float>::infinity();
+	}
+
+	for(unsigned int i=0; i<v2.size(); i++){
+		dtw.at(0).at(i) = std::numeric_limits<float>::infinity();
+	}
+
+	for(unsigned int i=0; i<v1.size(); i++){
+		for(unsigned int j=0; j<v2.size(); j++){
+			cost = fabs(v1.at(i)-v2.at(j));
+			float min[3] = {dtw.at(i).at(j+1), dtw.at(i+1).at(j), dtw.at(i).at(j)};
+			dtw.at(i+1).at(j+1) = cost + findMin(min);
+		}
+	}
+
+	return dtw.at(v1.size()).at(v2.size());
+}
 
 void render(BeagleRTContext *context, void *userData){
 
@@ -116,7 +154,7 @@ void render(BeagleRTContext *context, void *userData){
 				gMagSpectrum[bin] = sqrtf(mag);
 				totEnergy += mag;
 			}
-			
+
 			totEnergy /= (float)gFFTSize;
 
 			if(totEnergy > 5.0){	
