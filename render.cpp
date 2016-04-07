@@ -16,7 +16,7 @@ extern float *gDrumSampleBuffers[NUMBER_OF_DRUMS];
 extern int gDrumSampleBufferLengths[NUMBER_OF_DRUMS];
 
 
-const int gFFTSize = 64;
+const int gFFTSize = 128;
 int gInputWritePointer;
 int gOutputReadPointer;
 float* gMagSpectrum;
@@ -38,13 +38,14 @@ bool setup(BeagleRTContext *context, void *userData){
 
 	for(unsigned int i=0; i<gFFTSize/2; i++){
 		weights[i] = pow(i,2);
+		// rt_printf("%d\n", weights[i]);
 	}
 
 	for (unsigned int i = 0; i < gFFTSize; i++){
 		gHanning[i] = 0.5 - 0.5 * cos(2 * M_PI * i / (gFFTSize - 1));	
 	}
 
-	gMagSpectrum = new float[gFFTSize/2];
+	gMagSpectrum = new float[gFFTSize];
 	return true;
 }
 
@@ -63,10 +64,38 @@ float centroid(float* ampSpectrum) {
 	float numerator = 0;
 	float denominator = 0;
 	for (unsigned int k = 0; k < gFFTSize/2; k++) {
-		numerator += k * abs(ampSpectrum[k]);
+		numerator += ((float)k * fabs(ampSpectrum[k]));
 		denominator += ampSpectrum[k];
 	}
 	return numerator / denominator;
+}
+
+float rolloff(float* ampSpectrum){
+	float nyqBin = 44100.0/(2.0*((gFFTSize/2.0)-1));
+	float ec = 0;
+	for (int i = 0; i < (gFFTSize/2); i++) {
+		ec += ampSpectrum[i];
+	}
+
+	float threshold = 0.99 * ec;
+	int n = (gFFTSize/2) - 1;
+	while (ec > threshold && n >= 0) {
+		ec -= ampSpectrum[n];
+		--n;
+	}
+
+	return (n + 1) * nyqBin;
+}
+
+float flatness(float* ampSpectrum){
+	float numerator = 0;
+	float denominator = 0;
+	for (int i = 0; i < gFFTSize/2; i++) {
+		numerator += log(ampSpectrum[i]);
+		denominator += ampSpectrum[i];
+	}
+
+	return exp(numerator / (gFFTSize/2))*(gFFTSize/2) / denominator;
 }
 
 
@@ -79,24 +108,21 @@ void render(BeagleRTContext *context, void *userData){
 		timeDomainIn[gInputWritePointer].i = 0;
 
 		if(++gInputWritePointer >= gFFTSize){
-			for(unsigned int i=0; i< gFFTSize; i++){
-				timeDomainIn[i].r *= gHanning[i];
-			}
+
 			ne10_fft_c2c_1d_float32_neon(frequencyDomain, timeDomainIn, cfg->twiddles, cfg->factors, gFFTSize, 0);
-			for(unsigned int bin=1; bin<gFFTSize/2; bin++){
-				float mag = pow(frequencyDomain[bin].r,2)*pow(frequencyDomain[bin].i,2);
-				gMagSpectrum[bin] = mag;
-				totEnergy += weights[bin]*mag;
+
+			for(unsigned int bin=0; bin<gFFTSize; bin++){
+				float mag = powf(frequencyDomain[bin].r,2)+powf(frequencyDomain[bin].i,2);
+				gMagSpectrum[bin] = sqrtf(mag);
+				totEnergy += mag;
 			}
+			
+			totEnergy /= (float)gFFTSize;
 
-			// for(unsigned int bin=0; bin<gFFTSize; bin++){
-			// 	printf("bin %d: %f\n", bin, frequencyDomain[bin].r);
-			// }
-			totEnergy /= (float)(gFFTSize/2);
-
-			if(totEnergy > 2.0){
-				// printf("%f\n", centroid(gMagSpectrum));
+			if(totEnergy > 5.0){	
 				gPlayDrum = true;
+				float cent = flatness(gMagSpectrum);
+				printf("%f\n", cent);
 			}
 
 			gInputWritePointer = 0;
@@ -110,6 +136,7 @@ void render(BeagleRTContext *context, void *userData){
 		if(gOutputReadPointer >= gDrumSampleBufferLengths[0]){
 			gPlayDrum = false;
 			gOutputReadPointer = -1;
+			rt_printf("*************************\n");
 		}
 
 		for(unsigned int ch=0; ch<context->audioChannels; ch++)
