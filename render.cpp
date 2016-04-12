@@ -58,17 +58,6 @@ bool setup(BeagleRTContext *context, void *userData){
 	return true;
 }
 
-float rms(float* samples, int numSamples){
-	float rms = 0;
-	for(unsigned int i=0; i<numSamples; i++){
-		rms += samples[i]*samples[i];
-	}
-	rms /= numSamples;
-	rms = sqrt(rms);
-
-	return rms;
-}
-
 float centroid(float* ampSpectrum) {
 	float numerator = 0;
 	float denominator = 0;
