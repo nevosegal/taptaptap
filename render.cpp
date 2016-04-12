@@ -4,9 +4,12 @@
 #include <math.h>
 #include <NE10.h>
 #include <stdio.h>
+#include <iostream>
 #include <WriteFile.h>
 #include "drums.h"
 #include <limits>
+#include <complex>
+#include <algorithm>
 
  
 ne10_fft_cpx_float32_t* timeDomainIn;
@@ -23,9 +26,15 @@ int gOutputReadPointer;
 float* gMagSpectrum;
 bool gPlayDrum;
 float gHanning[gFFTSize];
+bool gPrevStatus = false;
+bool gRecord;
 
-float weights[gFFTSize/2];
+std::vector<float> gFlatness;
+std::vector<float> gFlatness2;
+
 float totEnergy;
+float dtw_matrix[gFFTSize+1][gFFTSize+1];
+
 
 bool setup(BeagleRTContext *context, void *userData){
 	timeDomainIn = (ne10_fft_cpx_float32_t*) NE10_MALLOC (gFFTSize * sizeof (ne10_fft_cpx_float32_t));
@@ -37,16 +46,15 @@ bool setup(BeagleRTContext *context, void *userData){
 	totEnergy = 0;
 	gPlayDrum = false;
 
-	for(unsigned int i=0; i<gFFTSize/2; i++){
-		weights[i] = pow(i,2);
-		// rt_printf("%d\n", weights[i]);
-	}
+	for(unsigned int n=0; n<context->digitalFrames; n++){
+		pinModeFrame(context, 0, P9_12, INPUT);
+    }
 
 	for (unsigned int i = 0; i < gFFTSize; i++){
 		gHanning[i] = 0.5 - 0.5 * cos(2 * M_PI * i / (gFFTSize - 1));	
 	}
 
-	gMagSpectrum = new float[gFFTSize];
+	gMagSpectrum = new float[gFFTSize/2];
 	return true;
 }
 
@@ -68,7 +76,7 @@ float centroid(float* ampSpectrum) {
 		numerator += ((float)k * fabs(ampSpectrum[k]));
 		denominator += ampSpectrum[k];
 	}
-	return numerator / denominator;
+	return (numerator/denominator)/(gFFTSize/2);
 }
 
 float rolloff(float* ampSpectrum){
@@ -85,7 +93,7 @@ float rolloff(float* ampSpectrum){
 		--n;
 	}
 
-	return (n + 1) * nyqBin;
+	return ((n + 1) * nyqBin)/ 22050.0;
 }
 
 float flatness(float* ampSpectrum){
@@ -115,31 +123,67 @@ float findMin(float* minVals){
 float dtw(std::vector<float> v1, std::vector<float> v2){
 	float cost = 0;
 	std::vector<float> temp(v2.size()+1, 0.0);
-	std::vector< std::vector<float> > dtw(v1.size()+1, temp);
+	std::vector< std::vector<float> > dtw_matrix(v1.size()+1, temp);
 	
-	dtw.at(0).at(0) = 0.0;
 	for(unsigned int i=0; i<v1.size(); i++){
-		dtw.at(i).at(0) = std::numeric_limits<float>::infinity();
+		dtw_matrix.at(i).at(0) = std::numeric_limits<float>::infinity();
 	}
 
 	for(unsigned int i=0; i<v2.size(); i++){
-		dtw.at(0).at(i) = std::numeric_limits<float>::infinity();
+		dtw_matrix.at(0).at(i) = std::numeric_limits<float>::infinity();
 	}
+
+	dtw_matrix.at(0).at(0) = 0.0;
+
 
 	for(unsigned int i=0; i<v1.size(); i++){
 		for(unsigned int j=0; j<v2.size(); j++){
 			cost = fabs(v1.at(i)-v2.at(j));
-			float min[3] = {dtw.at(i).at(j+1), dtw.at(i+1).at(j), dtw.at(i).at(j)};
-			dtw.at(i+1).at(j+1) = cost + findMin(min);
+			float min[3] = {dtw_matrix.at(i).at(j+1), dtw_matrix.at(i+1).at(j), dtw_matrix.at(i).at(j)};
+			dtw_matrix.at(i+1).at(j+1) = cost + findMin(min);
 		}
 	}
 
-	return dtw.at(v1.size()).at(v2.size());
+	return dtw_matrix.at(v1.size()).at(v2.size());
 }
+
+
+//http://stackoverflow.com/questions/8424170/1d-linear-convolution-in-ansi-c-code
+float xcorr(std::vector<float> v1, std::vector<float> v2){
+	float out = 0;
+	std::reverse(v2.begin(), v2.end());
+	int outputSize = v1.size()+v2.size()-1;
+	std::vector<float> y(outputSize);
+
+	for (int n = 0; n < outputSize; n++){
+		int kmin, kmax;
+
+		y.at(n) = 0;
+
+		kmin = (n >= v2.size() - 1) ? n - (v2.size() - 1) : 0;
+		kmax = (n < v1.size() - 1) ? n : v1.size() - 1;
+
+		for (int k = kmin; k <= kmax; k++){
+			y.at(n) += v1.at(k) * v2.at(n - k);
+		}
+		out+=fabs(y.at(n));
+	}
+	return out;
+}
+
 
 void render(BeagleRTContext *context, void *userData){
 
+	for(unsigned int n=0; n<context->digitalFrames; n++){
+		int status=digitalReadFrame(context, 0, P9_12);
+		
+		if(status && !gPrevStatus) gRecord = !gRecord;
+
+		gPrevStatus = status;
+	}
+
 	float out = 0;
+
 	for(unsigned int n = 0; n < context->audioFrames; n++) {
 
 		timeDomainIn[gInputWritePointer].r = (ne10_float32_t)(context->audioIn[n*context->audioChannels]);
@@ -147,22 +191,38 @@ void render(BeagleRTContext *context, void *userData){
 
 		if(++gInputWritePointer >= gFFTSize){
 
+			// apply hann window.
+			for (int i = 0; i < gFFTSize; i++){
+				timeDomainIn[i].r *= gHanning[i];
+			}
+
+			// compute FFT.
 			ne10_fft_c2c_1d_float32_neon(frequencyDomain, timeDomainIn, cfg->twiddles, cfg->factors, gFFTSize, 0);
 
-			for(unsigned int bin=0; bin<gFFTSize; bin++){
+
+			for(unsigned int bin=0; bin<gFFTSize/2; bin++){
+				// compute magnitude spectrum.
 				float mag = powf(frequencyDomain[bin].r,2)+powf(frequencyDomain[bin].i,2);
 				gMagSpectrum[bin] = sqrtf(mag);
 				totEnergy += mag;
 			}
+			
 
-			totEnergy /= (float)gFFTSize;
+			totEnergy /= (float)gFFTSize/2;
 
-			if(totEnergy > 5.0){	
-				gPlayDrum = true;
-				float cent = flatness(gMagSpectrum);
-				printf("%f\n", cent);
+			if(totEnergy > 2.0){
+				// compute features.
+				float flat = flatness(gMagSpectrum);
+				float cent = centroid(gMagSpectrum);
+				float roll = rolloff(gMagSpectrum);
+				if(gRecord){
+					gFlatness.push_back(flat);
+				}
+				else{
+					gFlatness2.push_back(flat);
+					gPlayDrum = true;
+				}
 			}
-
 			gInputWritePointer = 0;
 		}
 
@@ -174,7 +234,8 @@ void render(BeagleRTContext *context, void *userData){
 		if(gOutputReadPointer >= gDrumSampleBufferLengths[0]){
 			gPlayDrum = false;
 			gOutputReadPointer = -1;
-			rt_printf("*************************\n");
+			printf("%f\n", xcorr(gFlatness, gFlatness2));
+			gFlatness2.clear();
 		}
 
 		for(unsigned int ch=0; ch<context->audioChannels; ch++)
