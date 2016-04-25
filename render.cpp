@@ -11,89 +11,95 @@
 #include <complex>
 #include <algorithm>
 
- 
+const int NUMBER_OF_FEATURES = 3;
+
+// set FFT size.
+const int FFT_SIZE = 128;
+
+// create variables for FFT.
 ne10_fft_cpx_float32_t* timeDomainIn;
 ne10_fft_cpx_float32_t* frequencyDomain;
 ne10_fft_cfg_float32_t cfg;
 
+// set external variables.
 extern float *gDrumSampleBuffers[NUMBER_OF_DRUMS];
 extern int gDrumSampleBufferLengths[NUMBER_OF_DRUMS];
 
-const int NUMBER_OF_FEATURES = 3;
-
-
-const int gFFTSize = 128;
+// create variables.
 int gInputWritePointer;
 int gOutputReadPointerA, gOutputReadPointerB;
 float* gMagSpectrum;
 bool gPlayDrumA, gPlayDrumB;
-float gHanning[gFFTSize];
+float gHanning[FFT_SIZE];
 bool gPrevStatusA = false;
 bool gPrevStatusB = false;
 bool gRecordA, gRecordB;
 bool isEngaged = false;
 float gSimA, gSimB;
+float totEnergy;
 
+// create feature matrices that will contain the feature vectors.
 std::vector< std::vector<float> > gRecordedFeaturesA(NUMBER_OF_FEATURES);
 std::vector< std::vector<float> > gRecordedFeaturesB(NUMBER_OF_FEATURES);
-std::vector< std::vector<float> > gRecordedFeaturesC(NUMBER_OF_FEATURES);
 std::vector< std::vector<float> > gIncomingFeatures(NUMBER_OF_FEATURES);
 
-std::vector<float> gRecordedMeanA(NUMBER_OF_FEATURES);
-std::vector<float> gRecordedMeanB(NUMBER_OF_FEATURES);
-std::vector<float> gRecordedMeanC(NUMBER_OF_FEATURES);
-std::vector<float> gIncomingMean(NUMBER_OF_FEATURES);
-
-float totEnergy;
-float dtw_matrix[gFFTSize+1][gFFTSize+1];
-
-
 bool setup(BeagleRTContext *context, void *userData){
-	timeDomainIn = (ne10_fft_cpx_float32_t*) NE10_MALLOC (gFFTSize * sizeof (ne10_fft_cpx_float32_t));
-	frequencyDomain = (ne10_fft_cpx_float32_t*) NE10_MALLOC (gFFTSize * sizeof (ne10_fft_cpx_float32_t));
-	cfg = ne10_fft_alloc_c2c_float32 (gFFTSize);
 
+	// allocate memory for the time domain and frequency domain signals.
+	timeDomainIn = (ne10_fft_cpx_float32_t*) NE10_MALLOC (FFT_SIZE * sizeof (ne10_fft_cpx_float32_t));
+	frequencyDomain = (ne10_fft_cpx_float32_t*) NE10_MALLOC (FFT_SIZE * sizeof (ne10_fft_cpx_float32_t));
+	cfg = ne10_fft_alloc_c2c_float32 (FFT_SIZE);
+
+	// instantiate read/write pointers.
 	gInputWritePointer = 0;
 	gOutputReadPointerA = -1;
 	gOutputReadPointerB = -1;
+
+	// instantiate the energy.
 	totEnergy = 0;
 	gPlayDrumA = false;
 	gPlayDrumB = false;
 
+	// initialise input pins.
 	for(unsigned int n=0; n<context->digitalFrames; n++){
 		pinModeFrame(context, 0, P9_12, INPUT);
 		pinModeFrame(context, 0, P9_14, INPUT);
     }
 
-	for (unsigned int i = 0; i < gFFTSize; i++){
-		gHanning[i] = 0.5 - 0.5 * cos(2 * M_PI * i / (gFFTSize - 1));	
+    // instatiate the Hann window array.
+	for (unsigned int i = 0; i < FFT_SIZE; i++){
+		gHanning[i] = 0.5 - 0.5 * cos(2 * M_PI * i / (FFT_SIZE - 1));	
 	}
 
-	gMagSpectrum = new float[gFFTSize/2];
+	// instantiate magnitude spectrum array.
+	gMagSpectrum = new float[FFT_SIZE/2];
+
+	// set default values to similarity variables.
 	gSimA = 100;
 	gSimB = 100;
+
 	return true;
 }
 
 float centroid(float* ampSpectrum) {
 	float numerator = 0;
 	float denominator = 0;
-	for (unsigned int k = 0; k < gFFTSize/2; k++) {
+	for (unsigned int k = 0; k < FFT_SIZE/2; k++) {
 		numerator += ((float)k * fabs(ampSpectrum[k]));
 		denominator += ampSpectrum[k];
 	}
-	return (numerator/denominator)/(gFFTSize/2);
+	return (numerator/denominator)/(FFT_SIZE/2);
 }
 
 float rolloff(float* ampSpectrum){
-	float nyqBin = 44100.0/(2.0*((gFFTSize/2.0)-1));
+	float nyqBin = 44100.0/(2.0*((FFT_SIZE/2.0)-1));
 	float ec = 0;
-	for (int i = 0; i < (gFFTSize/2); i++) {
+	for (int i = 0; i < (FFT_SIZE/2); i++) {
 		ec += ampSpectrum[i];
 	}
 
 	float threshold = 0.99 * ec;
-	int n = (gFFTSize/2) - 1;
+	int n = (FFT_SIZE/2) - 1;
 	while (ec > threshold && n >= 0) {
 		ec -= ampSpectrum[n];
 		--n;
@@ -105,12 +111,12 @@ float rolloff(float* ampSpectrum){
 float flatness(float* ampSpectrum){
 	float numerator = 0;
 	float denominator = 0;
-	for (int i = 0; i < gFFTSize/2; i++) {
+	for (int i = 0; i < FFT_SIZE/2; i++) {
 		numerator += log(ampSpectrum[i]);
 		denominator += ampSpectrum[i];
 	}
 
-	return exp(numerator / (gFFTSize/2))*(gFFTSize/2) / denominator;
+	return exp(numerator / (FFT_SIZE/2))*(FFT_SIZE/2) / denominator;
 }
 
 //http://stackoverflow.com/questions/8424170/1d-linear-convolution-in-ansi-c-code
@@ -176,17 +182,17 @@ void render(BeagleRTContext *context, void *userData){
 		timeDomainIn[gInputWritePointer].i = 0;
 
 		// if we have enough data, compute FFT.
-		if(++gInputWritePointer >= gFFTSize){
+		if(++gInputWritePointer >= FFT_SIZE){
 
 			// before the FFT - apply Hann window.
-			for (int i = 0; i < gFFTSize; i++){
+			for (int i = 0; i < FFT_SIZE; i++){
 				timeDomainIn[i].r *= gHanning[i];
 			}
 
 			// compute FFT.
-			ne10_fft_c2c_1d_float32_neon(frequencyDomain, timeDomainIn, cfg->twiddles, cfg->factors, gFFTSize, 0);
+			ne10_fft_c2c_1d_float32_neon(frequencyDomain, timeDomainIn, cfg->twiddles, cfg->factors, FFT_SIZE, 0);
 
-			for(unsigned int bin=0; bin<gFFTSize/2; bin++){
+			for(unsigned int bin=0; bin<FFT_SIZE/2; bin++){
 				// compute magnitude spectrum.
 				float mag = powf(frequencyDomain[bin].r,2)+powf(frequencyDomain[bin].i,2);
 				gMagSpectrum[bin] = sqrtf(mag);
@@ -195,7 +201,7 @@ void render(BeagleRTContext *context, void *userData){
 				totEnergy += mag;
 			}
 			
-			totEnergy /= (float)gFFTSize/2;
+			totEnergy /= (float)FFT_SIZE/2;
 
 			// Setting a threshold for the energy. If it passes this threshold, the analysis begins.
 			if(totEnergy > 5.0){
