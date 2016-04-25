@@ -18,7 +18,7 @@
 #ifndef _DRUMS_H
 #define _DRUMS_H
 
-#define NUMBER_OF_DRUMS 1
+#define NUMBER_OF_DRUMS 2
 
 /* Start playing a particular drum sound */
 void startPlayingDrum(int drumIndex);

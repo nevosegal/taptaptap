@@ -141,10 +141,9 @@ float xcorr(std::vector<float> v1, std::vector<float> v2){
 	return out;
 }
 
-// accepts two feature matrices and computes the similarity between them.
 float getSimilarityMeasure(std::vector< std::vector<float> > v1, std::vector< std::vector<float> > v2){
 	float similarity = 0;
-	for(unsigned int i=0; i<NUMBER_OF_FEATURES; i++){
+	for(unsigned int i=1; i<NUMBER_OF_FEATURES; i++){
 		similarity += xcorr(v1.at(i), v2.at(i));
 	}
 
@@ -153,8 +152,6 @@ float getSimilarityMeasure(std::vector< std::vector<float> > v1, std::vector< st
 
 
 void render(BeagleRTContext *context, void *userData){
-
-	// detect when a button is pressed and begin recording if so.
 	for(unsigned int n=0; n<context->digitalFrames; n++){
 		int statusA=digitalReadFrame(context, 0, P9_12);
 		int statusB=digitalReadFrame(context, 0, P9_14);
@@ -162,7 +159,6 @@ void render(BeagleRTContext *context, void *userData){
 		if(statusA && !gPrevStatusA) gRecordA = !gRecordA;
 		if(statusB && !gPrevStatusB) gRecordB = !gRecordB;
 
-		// store current status as the previous for the next loop.
 		gPrevStatusA = statusA;
 		gPrevStatusB = statusB;
 	}
@@ -229,18 +225,50 @@ void render(BeagleRTContext *context, void *userData){
 			else{
 				if(isEngaged){
 
-					// Check similarity of incoming signal to the first recorded signal A.
+					//apply xcorrelation here.
 					if(gIncomingFeatures.at(0).size()!=0 && gRecordedFeaturesA.at(0).size()!=0){
+					// 	float d = 0;
+					// 	for (int i = 0; i < NUMBER_OF_FEATURES; i++){
+					// 		for (int j = 0; j < gRecordedFeaturesA.at(i).size(); j++){
+					// 			gRecordedMeanA.at(i) += gRecordedFeaturesA.at(i).at(j);
+					// 		}
+					// 		gRecordedMeanA.at(i) /= gRecordedFeaturesA.at(i).size();
+					// 	}
+
+					// 	for (int i = 0; i < NUMBER_OF_FEATURES; i++){
+					// 		for (int j = 0; j < gIncomingFeatures.at(i).size(); j++){
+					// 			gIncomingMean.at(i) = gIncomingFeatures.at(i).at(j);
+					// 		}
+					// 		gIncomingMean.at(i) /= gIncomingFeatures.at(i).size();
+					// 		d += fabs(gIncomingMean.at(i) - gRecordedMeanA.at(i));
+					// 	}
+					// 	d /= (float)NUMBER_OF_FEATURES;
+					// 	gSimA = d;
+					// }
 						gSimA = getSimilarityMeasure(gRecordedFeaturesA, gIncomingFeatures);
 						printf("similarity to A: %f\n", gSimA);
 					}
-					// Check similarity of incoming signal to the second recorded signal B.
 					if(gIncomingFeatures.at(0).size()!=0 && gRecordedFeaturesB.at(0).size()!=0){
+					// 	float d = 0;
+					// 	for (int i = 0; i < NUMBER_OF_FEATURES; i++){
+					// 		for (int j = 0; j < gRecordedFeaturesB.at(i).size(); j++){
+					// 			gRecordedMeanB.at(i) += gRecordedFeaturesB.at(i).at(j);
+					// 		}
+					// 		gRecordedMeanB.at(i) /= gRecordedFeaturesB.at(i).size();
+					// 	}
+
+					// 	for (int i = 0; i < NUMBER_OF_FEATURES; i++){
+					// 		for (int j = 0; j < gIncomingFeatures.at(i).size(); j++){
+					// 			gIncomingMean.at(i) = gIncomingFeatures.at(i).at(j);
+					// 		}
+					// 		gIncomingMean.at(i) /= gIncomingFeatures.at(i).size();
+
+					// 		d += fabs(gIncomingMean.at(i) - gRecordedMeanB.at(i));
+					// 	}
+					// 	d /= (float)NUMBER_OF_FEATURES;
 						gSimB = getSimilarityMeasure(gRecordedFeaturesB, gIncomingFeatures);
 						printf("similarity to B: %f\n", gSimB);
 					}
-
-					// play the correct sample according to the distance.
 					if(gSimA != 100 || gSimB != 100){
 						if(gSimA <= gSimB){
 							gPlayDrumA = true;
@@ -250,27 +278,19 @@ void render(BeagleRTContext *context, void *userData){
 						}
 					}
 				}
-
-				// disengage.
 				isEngaged = false;
 			}
-
-			// reset the input pointer.
 			gInputWritePointer = 0;
 		}
 
-		// if the first drum should be played, increment its pointer and get the sample.
 		if(gPlayDrumA){
 			gOutputReadPointerA++;
 			out = gDrumSampleBuffers[0][gOutputReadPointerA];
 		}
-		// if the second drum should be played, increment its pointer and get the sample.
 		if(gPlayDrumB){
 			gOutputReadPointerB++;
 			out = gDrumSampleBuffers[1][gOutputReadPointerB];
 		}
-
-		// if the drum sound reached its end, reset the pointer and the boolean and clear the incoming features matrix.
 		if(gOutputReadPointerA >= gDrumSampleBufferLengths[0]){
 			gPlayDrumA = false;
 			gOutputReadPointerA = -1;
@@ -279,7 +299,6 @@ void render(BeagleRTContext *context, void *userData){
 				gIncomingFeatures.at(i).clear();
 			}
 		}
-		// if the drum sound reached its end, reset the pointer and the boolean and clear the incoming features matrix.
 		if(gOutputReadPointerB >= gDrumSampleBufferLengths[1]){
 			gPlayDrumB = false;
 			gOutputReadPointerB = -1;
@@ -289,14 +308,12 @@ void render(BeagleRTContext *context, void *userData){
 			}
 		}
 
-		// store sample in output.
 		for(unsigned int ch=0; ch<context->audioChannels; ch++)
 			context->audioOut[n*context->audioChannels+ch] = out;
 	}
 }
 
 void cleanup(BeagleRTContext *context, void *userData){
-	// release memory.
 	NE10_FREE(timeDomainIn);
 	NE10_FREE(frequencyDomain);
 	NE10_FREE(cfg);
